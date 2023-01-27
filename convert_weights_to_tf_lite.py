@@ -38,4 +38,4 @@ if __name__ == '__main__':
     converter = DTLN_model()
     converter.create_tf_lite_model(args.weights_file, 
                                    args.target_folder, 
-                                   use_dynamic_range_quant=bool(args.quantization))
+                                   use_dynamic_range_quant=args.quantization == 'True')

@@ -13,11 +13,11 @@ This code is licensed under the terms of the MIT-license.
 
 
 import os, fnmatch
-import tensorflow.keras as keras
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Activation, Dense, LSTM, Dropout, \
+import keras
+from keras.models import Model
+from keras.layers import Activation, Dense, LSTM, Dropout, \
     Lambda, Input, Multiply, Layer, Conv1D
-from tensorflow.keras.callbacks import ReduceLROnPlateau, CSVLogger, \
+from keras.callbacks import ReduceLROnPlateau, CSVLogger, \
     EarlyStopping, ModelCheckpoint
 import tensorflow as tf
 import soundfile as sf
@@ -64,7 +64,9 @@ class audio_generator():
         self.file_names = fnmatch.filter(os.listdir(self.path_to_input), '*.wav')
         # count the number of samples contained in the dataset
         self.total_samples = 0
+        print("loading audio...")
         for file in self.file_names:
+            print(file, end="\r", flush=True)
             info = WavInfoReader(os.path.join(self.path_to_input, file))
             self.total_samples = self.total_samples + \
                 int(np.fix(info.data.frame_count/self.len_of_samples))
@@ -137,7 +139,7 @@ class DTLN_model():
         # defining default parameters
         self.fs = 16000
         self.batchsize = 32
-        self.len_samples = 15
+        self.len_samples = 6
         self.activation = 'sigmoid'
         self.numUnits = 128
         self.numLayer = 2
@@ -155,6 +157,7 @@ class DTLN_model():
         tf.random.set_seed(42)
         # some line to correctly find some libraries in TF 2.x
         physical_devices = tf.config.experimental.list_physical_devices('GPU')
+        print(physical_devices)
         if len(physical_devices) > 0:
             for device in physical_devices:
                 tf.config.experimental.set_memory_growth(device, enable=True)
@@ -334,12 +337,8 @@ class DTLN_model():
         time_dat = Input(batch_shape=(None, None))
         # calculate STFT
         mag,angle = Lambda(self.stftLayer)(time_dat)
-        # normalizing log magnitude stfts to get more robust against level variations
-        if norm_stft:
-            mag_norm = InstantLayerNormalization()(tf.math.log(mag + 1e-7))
-        else:
-            # behaviour like in the paper
-            mag_norm = mag
+        # behaviour like in the paper
+        mag_norm = mag
         # predicting mask with separation kernel  
         mask_1 = self.seperation_kernel(self.numLayer, (self.blockLen//2+1), mag_norm)
         # multiply mask with magnitude
@@ -348,10 +347,8 @@ class DTLN_model():
         estimated_frames_1 = Lambda(self.ifftLayer)([estimated_mag,angle])
         # encode time domain frames to feature domain
         encoded_frames = Conv1D(self.encoder_size,1,strides=1,use_bias=False)(estimated_frames_1)
-        # normalize the input to the separation kernel
-        encoded_frames_norm = InstantLayerNormalization()(encoded_frames)
         # predict mask based on the normalized feature frames
-        mask_2 = self.seperation_kernel(self.numLayer, self.encoder_size, encoded_frames_norm)
+        mask_2 = self.seperation_kernel(self.numLayer, self.encoder_size, encoded_frames)
         # multiply encoded frames with the mask
         estimated = Multiply()([encoded_frames, mask_2]) 
         # decode the frames back to time domain
@@ -376,12 +373,8 @@ class DTLN_model():
         time_dat = Input(batch_shape=(1, self.blockLen))
         # calculate STFT
         mag,angle = Lambda(self.fftLayer)(time_dat)
-        # normalizing log magnitude stfts to get more robust against level variations
-        if norm_stft:
-            mag_norm = InstantLayerNormalization()(tf.math.log(mag + 1e-7))
-        else:
-            # behaviour like in the paper
-            mag_norm = mag
+        # behaviour like in the paper
+        mag_norm = mag
         # predicting mask with separation kernel  
         mask_1 = self.seperation_kernel(self.numLayer, (self.blockLen//2+1), mag_norm, stateful=True)
         # multiply mask with magnitude
@@ -390,10 +383,8 @@ class DTLN_model():
         estimated_frames_1 = Lambda(self.ifftLayer)([estimated_mag,angle])
         # encode time domain frames to feature domain
         encoded_frames = Conv1D(self.encoder_size,1,strides=1,use_bias=False)(estimated_frames_1)
-        # normalize the input to the separation kernel
-        encoded_frames_norm = InstantLayerNormalization()(encoded_frames)
         # predict mask based on the normalized feature frames
-        mask_2 = self.seperation_kernel(self.numLayer, self.encoder_size, encoded_frames_norm, stateful=True)
+        mask_2 = self.seperation_kernel(self.numLayer, self.encoder_size, encoded_frames, stateful=True)
         # multiply encoded frames with the mask
         estimated = Multiply()([encoded_frames, mask_2]) 
         # decode the frames back to time domain
@@ -458,12 +449,8 @@ class DTLN_model():
         #### Model 1 ##########################
         mag = Input(batch_shape=(1, 1, (self.blockLen//2+1)))
         states_in_1 = Input(batch_shape=(1, self.numLayer, self.numUnits, 2))
-        # normalizing log magnitude stfts to get more robust against level variations
-        if norm_stft:
-            mag_norm = InstantLayerNormalization()(tf.math.log(mag + 1e-7))
-        else:
-            # behaviour like in the paper
-            mag_norm = mag
+        # behaviour like in the paper
+        mag_norm = mag
         # predicting mask with separation kernel  
         mask_1, states_out_1 = self.seperation_kernel_with_states(self.numLayer, 
                                                     (self.blockLen//2+1), 
@@ -479,12 +466,11 @@ class DTLN_model():
         # encode time domain frames to feature domain
         encoded_frames = Conv1D(self.encoder_size,1,strides=1,
                                 use_bias=False)(estimated_frame_1)
-        # normalize the input to the separation kernel
-        encoded_frames_norm = InstantLayerNormalization()(encoded_frames)
+
         # predict mask based on the normalized feature frames
-        mask_2, states_out_2 = self.seperation_kernel_with_states(self.numLayer, 
-                                                    self.encoder_size, 
-                                                    encoded_frames_norm, 
+        mask_2, states_out_2 = self.seperation_kernel_with_states(self.numLayer,
+                                                    self.encoder_size,
+                                                    encoded_frames,
                                                     states_in_2)
         # multiply encoded frames with the mask
         estimated = Multiply()([encoded_frames, mask_2]) 
@@ -583,59 +569,3 @@ class DTLN_model():
 
     
 
-class InstantLayerNormalization(Layer):
-    '''
-    Class implementing instant layer normalization. It can also be called 
-    channel-wise layer normalization and was proposed by 
-    Luo & Mesgarani (https://arxiv.org/abs/1809.07454v2) 
-    '''
-
-    def __init__(self, **kwargs):
-        '''
-            Constructor
-        '''
-        super(InstantLayerNormalization, self).__init__(**kwargs)
-        self.epsilon = 1e-7 
-        self.gamma = None
-        self.beta = None
-
-    def build(self, input_shape):
-        '''
-        Method to build the weights.
-        '''
-        shape = input_shape[-1:]
-        # initialize gamma
-        self.gamma = self.add_weight(shape=shape,
-                             initializer='ones',
-                             trainable=True,
-                             name='gamma')
-        # initialize beta
-        self.beta = self.add_weight(shape=shape,
-                             initializer='zeros',
-                             trainable=True,
-                             name='beta')
- 
-
-    def call(self, inputs):
-        '''
-        Method to call the Layer. All processing is done here.
-        '''
-
-        # calculate mean of each frame
-        mean = tf.math.reduce_mean(inputs, axis=[-1], keepdims=True)
-        # calculate variance of each frame
-        variance = tf.math.reduce_mean(tf.math.square(inputs - mean), 
-                                       axis=[-1], keepdims=True)
-        # calculate standard deviation
-        std = tf.math.sqrt(variance + self.epsilon)
-        # normalize each frame independently 
-        outputs = (inputs - mean) / std
-        # scale with gamma
-        outputs = outputs * self.gamma
-        # add the bias beta
-        outputs = outputs + self.beta
-        # return output
-        return outputs
-    
-
-    
