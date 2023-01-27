@@ -131,7 +131,7 @@ class DTLN_model():
         '''
         Constructor
         '''
-
+        self.path_to_input = ""
         # defining default cost function
         self.cost_function = self.snr_cost
         # empty property for the model
@@ -404,6 +404,69 @@ class DTLN_model():
         optimizerAdam = keras.optimizers.Adam(lr=self.lr, clipnorm=3.0)
         # compile model with loss function
         self.model.compile(loss=self.lossWrapper(), optimizer=optimizerAdam)
+
+    def set_path_to_input(self,path):
+        self.path_to_input = path
+
+    def representative_dataset1(self):
+        path_to_input = self.path_to_input
+        # list .wav files in directory
+        file_names = fnmatch.filter(os.listdir(path_to_input), '*.wav')
+        # calculate length of audio chunks in samples
+        len_in_samples = int(np.fix(self.fs * self.len_samples /
+                                    self.block_shift) * self.block_shift)
+        for file in [file_names[0]]:
+            # read the audio files
+            noisy, fs_1 = sf.read(os.path.join(path_to_input, file))
+            # check if the sampling rates are matching the specifications
+            if fs_1 != self.fs:
+                raise ValueError('Sampling rates do not match.')
+            if noisy.ndim != 1:
+                raise ValueError('Too many audio channels. The DTLN audio_generator \
+                                 only supports single channel audio data.')
+            # count the number of samples in one file
+            num_samples = int(np.fix(noisy.shape[0] / len_in_samples))
+            # iterate over the number of samples
+            for idx in range(num_samples):
+                # cut the audio files in chunks
+                in_dat = noisy[int(idx * self.blockLen):int((idx + 1) * self.blockLen)]
+
+                in_dat = np.fft.rfft(in_dat)
+                in_dat = np.abs(in_dat)
+                in_dat = np.reshape(in_dat, (1, 1, -1)).astype('float32')
+
+                states_in_1 = np.random.rand(1, self.numLayer, self.numUnits, 2) * 13
+
+                # yield the chunks as float32 data
+                yield [states_in_1.astype(np.float32),in_dat.astype(np.float32)]
+
+    def representative_dataset2(self):
+        path_to_input = self.path_to_input
+        # list .wav files in directory
+        file_names = fnmatch.filter(os.listdir(path_to_input), '*.wav')
+        # calculate length of audio chunks in samples
+        len_in_samples = int(np.fix(self.fs * self.len_samples /
+                                    self.block_shift) * self.block_shift)
+        for file in [file_names[0]]:
+            # read the audio files
+            noisy, fs_1 = sf.read(os.path.join(path_to_input, file))
+            # check if the sampling rates are matching the specifications
+            if fs_1 != self.fs:
+                raise ValueError('Sampling rates do not match.')
+            if noisy.ndim != 1:
+                raise ValueError('Too many audio channels. The DTLN audio_generator \
+                                 only supports single channel audio data.')
+            # count the number of samples in one file
+            num_samples = int(np.fix(noisy.shape[0] / len_in_samples))
+            # iterate over the number of samples
+            for idx in range(num_samples):
+                # cut the audio files in chunks
+                in_dat = noisy[int(idx * self.blockLen):int((idx + 1) * self.blockLen)]
+                states_in_1 = np.random.rand(1, self.numLayer, self.numUnits, 2) * 13
+
+                # yield the chunks as float32 data
+                yield [in_dat.astype(np.float32),states_in_1.astype(np.float32)]
+
         
     def create_saved_model(self, weights_file, target_name):
         '''
@@ -487,17 +550,33 @@ class DTLN_model():
         model_2.set_weights(weights[num_elements_first_core:])
         # convert first model
         converter = tf.lite.TFLiteConverter.from_keras_model(model_1)
+        filename = '_1.tflite'
         if use_dynamic_range_quant:
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.representative_dataset = self.representative_dataset2
+            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+            converter.experimental_new_converter = True
+            converter.target_spec.supported_types = [tf.int8]
+            converter.inference_input_type = tf.int8  # or tf.uint8
+            converter.inference_output_type = tf.int8  # or tf.uint8
+            filename = '_2_quant.tflite'
         tflite_model = converter.convert()
-        with tf.io.gfile.GFile(target_name + '_1.tflite', 'wb') as f:
+        with tf.io.gfile.GFile(target_name + filename, 'wb') as f:
               f.write(tflite_model)
         # convert second model    
         converter = tf.lite.TFLiteConverter.from_keras_model(model_2)
+        filename = '_2.tflite'
         if use_dynamic_range_quant:
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.representative_dataset = self.representative_dataset1
+            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+            converter.experimental_new_converter = True
+            converter.target_spec.supported_types = [tf.int8]
+            converter.inference_input_type = tf.int8  # or tf.uint8
+            converter.inference_output_type = tf.int8  # or tf.uint8
+            filename = '_1_quant.tflite'
         tflite_model = converter.convert()
-        with tf.io.gfile.GFile(target_name + '_2.tflite', 'wb') as f:
+        with tf.io.gfile.GFile(target_name + filename, 'wb') as f:
               f.write(tflite_model)
               
         print('TF lite conversion complete!')
