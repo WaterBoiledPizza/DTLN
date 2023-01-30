@@ -435,10 +435,8 @@ class DTLN_model():
                 in_dat = np.abs(in_dat)
                 in_dat = np.reshape(in_dat, (1, 1, -1)).astype('float32')
 
-                states_in_1 = np.random.rand(1, self.numLayer, self.numUnits, 2) * 13
-
                 # yield the chunks as float32 data
-                yield [states_in_1.astype(np.float32),in_dat.astype(np.float32)]
+                yield [in_dat.astype(np.float32)]
 
     def representative_dataset2(self):
         path_to_input = self.path_to_input
@@ -462,10 +460,9 @@ class DTLN_model():
             for idx in range(num_samples):
                 # cut the audio files in chunks
                 in_dat = noisy[int(idx * self.blockLen):int((idx + 1) * self.blockLen)]
-                states_in_1 = np.random.rand(1, self.numLayer, self.numUnits, 2) * 13
 
                 # yield the chunks as float32 data
-                yield [in_dat.astype(np.float32),states_in_1.astype(np.float32)]
+                yield [in_dat.astype(np.float32)]
 
         
     def create_saved_model(self, weights_file, target_name):
@@ -505,44 +502,38 @@ class DTLN_model():
             norm_stft = False
             num_elements_first_core = self.numLayer * 3 + 2
         # build model    
-        self.build_DTLN_model_stateful(norm_stft=norm_stft)
+        self.build_DTLN_model()
         # load weights
         self.model.load_weights(weights_file)
         
         #### Model 1 ##########################
         mag = Input(batch_shape=(1, 1, (self.blockLen//2+1)))
-        states_in_1 = Input(batch_shape=(1, self.numLayer, self.numUnits, 2))
         # behaviour like in the paper
         mag_norm = mag
         # predicting mask with separation kernel  
-        mask_1, states_out_1 = self.seperation_kernel_with_states(self.numLayer, 
-                                                    (self.blockLen//2+1), 
-                                                    mag_norm, states_in_1)
+        mask_1 = self.seperation_kernel(self.numLayer, (self.blockLen//2+1), mag_norm)
         
-        model_1 = Model(inputs=[mag, states_in_1], outputs=[mask_1, states_out_1])
+        model_1 = Model(inputs=[mag], outputs=[mask_1])
         
         #### Model 2 ###########################
         
         estimated_frame_1 = Input(batch_shape=(1, 1, (self.blockLen)))
-        states_in_2 = Input(batch_shape=(1, self.numLayer, self.numUnits, 2))
         
         # encode time domain frames to feature domain
         encoded_frames = Conv1D(self.encoder_size,1,strides=1,
                                 use_bias=False)(estimated_frame_1)
 
         # predict mask based on the normalized feature frames
-        mask_2, states_out_2 = self.seperation_kernel_with_states(self.numLayer,
-                                                    self.encoder_size,
-                                                    encoded_frames,
-                                                    states_in_2)
+        mask_2 = self.seperation_kernel(self.numLayer, self.encoder_size, encoded_frames)
+
         # multiply encoded frames with the mask
         estimated = Multiply()([encoded_frames, mask_2]) 
         # decode the frames back to time domain
         decoded_frame = Conv1D(self.blockLen, 1, padding='causal',
                                use_bias=False)(estimated)
         
-        model_2 = Model(inputs=[estimated_frame_1, states_in_2], 
-                        outputs=[decoded_frame, states_out_2])
+        model_2 = Model(inputs=[estimated_frame_1],
+                        outputs=[decoded_frame])
         
         # set weights to submodels
         weights = self.model.get_weights()
@@ -553,13 +544,13 @@ class DTLN_model():
         filename = '_1.tflite'
         if use_dynamic_range_quant:
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.representative_dataset = self.representative_dataset2
+            converter.representative_dataset = self.representative_dataset1
             converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
             converter.experimental_new_converter = True
             converter.target_spec.supported_types = [tf.int8]
             converter.inference_input_type = tf.int8  # or tf.uint8
             converter.inference_output_type = tf.int8  # or tf.uint8
-            filename = '_2_quant.tflite'
+            filename = '_1_quant.tflite'
         tflite_model = converter.convert()
         with tf.io.gfile.GFile(target_name + filename, 'wb') as f:
               f.write(tflite_model)
@@ -568,13 +559,13 @@ class DTLN_model():
         filename = '_2.tflite'
         if use_dynamic_range_quant:
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.representative_dataset = self.representative_dataset1
+            converter.representative_dataset = self.representative_dataset2
             converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
             converter.experimental_new_converter = True
             converter.target_spec.supported_types = [tf.int8]
             converter.inference_input_type = tf.int8  # or tf.uint8
             converter.inference_output_type = tf.int8  # or tf.uint8
-            filename = '_1_quant.tflite'
+            filename = '_2_quant.tflite'
         tflite_model = converter.convert()
         with tf.io.gfile.GFile(target_name + filename, 'wb') as f:
               f.write(tflite_model)
