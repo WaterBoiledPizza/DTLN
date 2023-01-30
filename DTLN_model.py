@@ -553,13 +553,13 @@ class DTLN_model():
         filename = '_1.tflite'
         if use_dynamic_range_quant:
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.representative_dataset = self.representative_dataset2
+            converter.representative_dataset = self.representative_dataset1
             converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
             converter.experimental_new_converter = True
             converter.target_spec.supported_types = [tf.int8]
             converter.inference_input_type = tf.int8  # or tf.uint8
             converter.inference_output_type = tf.int8  # or tf.uint8
-            filename = '_2_quant.tflite'
+            filename = '_1_quant.tflite'
         tflite_model = converter.convert()
         with tf.io.gfile.GFile(target_name + filename, 'wb') as f:
               f.write(tflite_model)
@@ -568,13 +568,13 @@ class DTLN_model():
         filename = '_2.tflite'
         if use_dynamic_range_quant:
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.representative_dataset = self.representative_dataset1
+            converter.representative_dataset = self.representative_dataset2
             converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
             converter.experimental_new_converter = True
             converter.target_spec.supported_types = [tf.int8]
             converter.inference_input_type = tf.int8  # or tf.uint8
             converter.inference_output_type = tf.int8  # or tf.uint8
-            filename = '_1_quant.tflite'
+            filename = '_2_quant.tflite'
         tflite_model = converter.convert()
         with tf.io.gfile.GFile(target_name + filename, 'wb') as f:
               f.write(tflite_model)
